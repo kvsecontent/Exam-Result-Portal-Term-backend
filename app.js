@@ -9,9 +9,9 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
-// Improved environment variable handling
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+// Improved environment variable handling - use let instead of const to allow reassignment
+let SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+let GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 let GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
 
 // Debug environment variables
