@@ -10,70 +10,90 @@ app.use(express.json());
 app.use(cors());
 
 // Check for required environment variables
-if (!process.env.SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
-  console.error('Missing required environment variables. Please set SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_EMAIL.');
+if (!process.env.SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+  console.error('Missing required environment variables. Please set SPREADSHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY.');
 }
 
 // Google Sheet API credentials
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+let GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
 
-// Improved private key handling
-let GOOGLE_PRIVATE_KEY;
-if (process.env.GOOGLE_PRIVATE_KEY) {
-  // Handle different formats of the private key
-  GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
-  
-  // If the key doesn't contain the header, it might be incorrectly formatted
-  if (!GOOGLE_PRIVATE_KEY.includes('-----BEGIN PRIVATE KEY-----')) {
-    // Try replacing literal \n with newlines
-    GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
-  }
-  
-  console.log('Private key format check: Key begins with proper header:', 
-    GOOGLE_PRIVATE_KEY.startsWith('-----BEGIN PRIVATE KEY-----'));
-  console.log('Private key length:', GOOGLE_PRIVATE_KEY.length);
-} else {
-  console.error('GOOGLE_PRIVATE_KEY environment variable is missing');
+// Format the private key if needed
+if (GOOGLE_PRIVATE_KEY && !GOOGLE_PRIVATE_KEY.includes('-----BEGIN PRIVATE KEY-----')) {
+  GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
 }
 
-// Sheet configuration
-const SHEET_NAME = "Sheet2"; // Change this to match your exact sheet name
+// Sheet configuration - use GID from the URL
+const TARGET_GID = 1921076835; // From your URL
 
 // Connect to Google Sheet
 async function loadSheet() {
   try {
     console.log('Connecting to Google Sheet...');
+    console.log(`Using Spreadsheet ID: ${SPREADSHEET_ID}`);
+    console.log(`Using Service Account: ${GOOGLE_SERVICE_ACCOUNT_EMAIL}`);
+    
     const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
     
-    try {
-      // Authenticate with service account
-      await doc.useServiceAccountAuth({
-        client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: GOOGLE_PRIVATE_KEY,
-      });
-    } catch (authError) {
-      console.error('Authentication error details:', authError.message);
-      // Check if there's an OpenSSL error which often indicates private key format issues
-      if (authError.message.includes('opensslErrorStack')) {
-        console.error('OpenSSL error detected - this usually means the private key format is incorrect');
-        console.error('Please check your GOOGLE_PRIVATE_KEY environment variable format');
-      }
-      throw new Error(`Authentication failed: ${authError.message}`);
-    }
+    await doc.useServiceAccountAuth({
+      client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: GOOGLE_PRIVATE_KEY
+    });
     
     await doc.loadInfo();
     console.log(`Spreadsheet loaded: "${doc.title}" with ${doc.sheetCount} sheets`);
     
     // List all available sheets for debugging
-    const sheetNames = doc.sheetsByIndex.map(sheet => sheet.title);
-    console.log('Available sheets:', sheetNames);
+    doc.sheetsByIndex.forEach((sheet, index) => {
+      console.log(`Sheet ${index}: "${sheet.title}" (GID: ${sheet.sheetId})`);
+    });
     
     return doc;
   } catch (error) {
     console.error('Error connecting to Google Sheet:', error);
-    throw new Error('Failed to connect to Google Sheet. Check your credentials.');
+    throw new Error(`Failed to connect to Google Sheet: ${error.message}`);
   }
+}
+
+// Find the target sheet by GID
+async function getTargetSheet(doc) {
+  // Find sheet by GID
+  let targetSheet = null;
+  
+  for (const sheet of doc.sheetsByIndex) {
+    console.log(`Checking sheet: ${sheet.title}, GID: ${sheet.sheetId}`);
+    if (sheet.sheetId === TARGET_GID) {
+      targetSheet = sheet;
+      console.log(`Found matching sheet by GID: ${sheet.title}`);
+      break;
+    }
+  }
+  
+  // If not found by GID, fallback to index 1 (Sheet2)
+  if (!targetSheet) {
+    console.log('Sheet not found by GID, trying index 1 (Sheet2)');
+    targetSheet = doc.sheetsByIndex[1];
+    
+    // If still not found, try sheet named "Sheet2"
+    if (!targetSheet) {
+      console.log('Sheet not found by index, trying by name "Sheet2"');
+      targetSheet = doc.sheetsByTitle['Sheet2'];
+      
+      // Last resort: use the first sheet
+      if (!targetSheet) {
+        console.log('Using first sheet as fallback');
+        targetSheet = doc.sheetsByIndex[0];
+      }
+    }
+  }
+  
+  if (!targetSheet) {
+    throw new Error('Could not find any sheet in the spreadsheet');
+  }
+  
+  console.log(`Using sheet: "${targetSheet.title}" (rows: ${targetSheet.rowCount})`);
+  return targetSheet;
 }
 
 // API endpoint to get student result by roll number and school code
@@ -95,22 +115,8 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     // Load sheet
     const doc = await loadSheet();
     
-    // Get the sheet by name (preferred method)
-    let targetSheet = doc.sheetsByTitle[SHEET_NAME];
-    
-    // If sheet not found by name, try index 1 (Sheet2) as fallback
-    if (!targetSheet) {
-      console.log(`Sheet "${SHEET_NAME}" not found by name, trying index 1 as fallback`);
-      targetSheet = doc.sheetsByIndex[1];
-      
-      if (!targetSheet) {
-        console.error('Failed to find the target sheet by name or index');
-        return res.status(500).json({
-          success: false,
-          message: 'Server configuration error: Target sheet not found'
-        });
-      }
-    }
+    // Get the target sheet
+    const targetSheet = await getTargetSheet(doc);
     
     console.log(`Using sheet: "${targetSheet.title}" (rowCount: ${targetSheet.rowCount})`);
     const rows = await targetSheet.getRows();
@@ -256,5 +262,5 @@ app.use('*', (req, res) => {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`Target sheet: "${SHEET_NAME}"`);
+  console.log(`Target GID: ${TARGET_GID}`);
 });
