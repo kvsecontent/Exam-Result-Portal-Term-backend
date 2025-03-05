@@ -1,152 +1,157 @@
-
-// app.js - Backend for Exam Results Portal
+// server.js or index.js
 const express = require('express');
+const { GoogleSpreadsheet } = require('google-spreadsheet');
 const cors = require('cors');
-const axios = require('axios');
-require('dotenv').config();
-
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
 app.use(cors());
 
-// Environment variables for sensitive data
-const SHEET_ID = process.env.SHEET_ID;
-const API_KEY = process.env.API_KEY;
+// Google Sheet API credentials
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
+const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
 
-// API endpoint to fetch student data
+// Connect to Google Sheet
+async function loadSheet() {
+  const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+  
+  await doc.useServiceAccountAuth({
+    client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    private_key: GOOGLE_PRIVATE_KEY,
+  });
+  
+  await doc.loadInfo();
+  return doc;
+}
+
+// API endpoint to get student result by roll number and school code
 app.get('/api/student/:rollNumber', async (req, res) => {
   try {
-    const { rollNumber } = req.params;
+    const rollNumber = req.params.rollNumber;
+    const schoolCode = req.query.school_code;
     
-    // Fetch data from Google Sheets API
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Sheet2?key=${API_KEY}`;
-    const response = await axios.get(url);
-    const data = response.data;
+    // Validate inputs
+    if (!rollNumber || !schoolCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both admission number and school code are required'
+      });
+    }
     
-    // Process the data to find the student
-    const rows = data.values;
-    const headers = rows[0]; // First row contains headers
+    // Load sheet
+    const doc = await loadSheet();
     
-    // Find the indexes of important columns
-    const rollIndex = headers.indexOf('Roll_Number');
-    const nameIndex = headers.indexOf('Name');
-    const classIndex = headers.indexOf('Class');
-    const schoolIndex = headers.indexOf('School');
-    const examInchargeSignatureIndex = headers.indexOf('ExamInchargeSignature');
-    const totalMarksIndex = headers.indexOf('Total_Marks');
-    const totalObtainedIndex = headers.indexOf('Total_Obtained');
-    const percentageIndex = headers.indexOf('Percentage');
-    const cgpaIndex = headers.indexOf('CGPA');
-    const resultIndex = headers.indexOf('Result');
-    const examNameIndex = headers.indexOf('Exam_Name');
-    const dobIndex = headers.indexOf('DOB');
-    const fatherNameIndex = headers.indexOf('Father_Name');
-    const motherNameIndex = headers.indexOf('Mother_Name');
+    // Assuming first sheet contains student data
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
     
-    // Find subject columns (they should be between Class and Total_Marks)
-    const subjectColumns = [];
-    for (let i = classIndex + 1; i < totalMarksIndex; i++) {
-      if (headers[i] && !headers[i].includes('_Grade') && !headers[i].includes('_Max')) {
-        // Check if there's a corresponding grade column
-        const gradeColumnName = `${headers[i]}_Grade`;
-        const gradeIndex = headers.indexOf(gradeColumnName);
-        
-        // Check if there's a corresponding max marks column
-        const maxMarksColumnName = `${headers[i]}_Max`;
-        const maxMarksIndex = headers.indexOf(maxMarksColumnName);
-        
-        subjectColumns.push({ 
-          index: i, 
-          name: headers[i],
-          gradeIndex: gradeIndex !== -1 ? gradeIndex : -1,
-          maxMarksIndex: maxMarksIndex !== -1 ? maxMarksIndex : -1
+    // Find student with matching roll number AND school code
+    const student = rows.find(row => 
+      row.Roll_Number === rollNumber && 
+      row.School_Code === schoolCode
+    );
+    
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found. Please check admission number and school code.'
+      });
+    }
+    
+    // Process student data (similar to your existing code)
+    // This is a basic example - modify according to your actual data structure
+    const subjects = [];
+    
+    // Process all columns to find subject data
+    for (const [key, value] of Object.entries(student)) {
+      // If column name contains subject info (add your logic here)
+      if (key.includes('_Obtained') || key.includes('_Max_Marks')) {
+        subjects.push({
+          name: key,
+          obtained: parseInt(value) || 0
         });
       }
     }
     
-    // Look for the student with matching roll number
-    let studentData = null;
-    for (let i = 1; i < rows.length; i++) {
-      if (rows[i][rollIndex] === rollNumber) {
-        // Found the student, now format the data
-        studentData = {
-          name: rows[i][nameIndex],
-          class: rows[i][classIndex],
-          school: schoolIndex !== -1 ? rows[i][schoolIndex] : 'PM SHRI KENDRIYA VIDYALAYA RAEBARELI',
-          examInchargeSignature: examInchargeSignatureIndex !== -1 ? rows[i][examInchargeSignatureIndex] : 'Exam Incharge.png',
-          totalMarks: parseInt(rows[i][totalMarksIndex]),
-          totalObtained: parseInt(rows[i][totalObtainedIndex]),
-          percentage: parseFloat(rows[i][percentageIndex]),
-          cgpa: rows[i][cgpaIndex], // Keep as string to allow text remarks
-          result: rows[i][resultIndex],
-          examName: examNameIndex !== -1 && rows[i][examNameIndex] ? rows[i][examNameIndex] : 'Final Term',
-          dob: dobIndex !== -1 ? rows[i][dobIndex] : 'Not Available',
-          fatherName: fatherNameIndex !== -1 ? rows[i][fatherNameIndex] : 'Not Available',
-          motherName: motherNameIndex !== -1 ? rows[i][motherNameIndex] : 'Not Available',
-          subjects: []
-        };
-        
-        // Process subject marks
-        subjectColumns.forEach(subject => {
-          const marks = parseInt(rows[i][subject.index]);
-          let grade;
-          let maxMarks = 100; // Default max marks
-          
-          // Get grade from Google Sheets if available
-          if (subject.gradeIndex !== -1 && rows[i][subject.gradeIndex]) {
-            grade = rows[i][subject.gradeIndex];
-          } else {
-            // Fallback to calculating grade
-            grade = calculateGrade(marks);
-          }
-          
-          // Get max marks from Google Sheets if available
-          if (subject.maxMarksIndex !== -1 && rows[i][subject.maxMarksIndex]) {
-            maxMarks = parseInt(rows[i][subject.maxMarksIndex]);
-          }
-          
-          studentData.subjects.push({
-            name: subject.name,
-            maxMarks: maxMarks,
-            obtained: marks,
-            grade: grade
-          });
-        });
-        
-        break;
-      }
-    }
+    // Calculate total obtained marks, percentage, etc.
+    const totalObtained = calculateTotalMarks(subjects);
+    const totalMarks = 100; // or calculate from your data
+    const percentage = ((totalObtained / totalMarks) * 100).toFixed(2);
     
-    if (studentData) {
-      return res.json({ success: true, data: studentData });
-    } else {
-      return res.status(404).json({ success: false, message: 'Student not found' });
-    }
+    // Prepare student data to return
+    const studentData = {
+      name: student.Name,
+      class: student.Class,
+      school: student.School_Name,
+      examName: student.Exam_Name || 'Examination',
+      dob: student.DOB,
+      fatherName: student.Father_Name,
+      motherName: student.Mother_Name,
+      subjects: subjects,
+      totalObtained: totalObtained,
+      totalMarks: totalMarks,
+      percentage: percentage,
+      cgpa: calculateCGPA(percentage),
+      result: totalObtained >= 33 ? 'PASS' : 'FAIL'
+    };
+    
+    return res.json({
+      success: true,
+      data: studentData
+    });
+    
   } catch (error) {
-    console.error('Error fetching data:', error);
-    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    console.error('Error fetching student data:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching student data'
+    });
   }
 });
 
-// Helper function to calculate grade
-function calculateGrade(marks) {
-  if (marks >= 90) return 'A';
-  else if (marks >= 80) return 'B';
-  else if (marks >= 70) return 'C';
-  else if (marks >= 60) return 'D';
-  else if (marks >= 50) return 'E';
-  else return 'F';
+// Helper function to calculate total marks
+function calculateTotalMarks(subjects) {
+  // Get unique base subjects (e.g., "Hindi" from "Hindi_Periodic_Test_Obtained")
+  const baseSubjects = new Set();
+  subjects.forEach(subject => {
+    if (subject.name.includes('_')) {
+      const baseSubject = subject.name.split('_')[0];
+      baseSubjects.add(baseSubject);
+    }
+  });
+  
+  // Calculate total for each subject
+  let totalMarks = 0;
+  baseSubjects.forEach(baseSubject => {
+    const subjectComponents = subjects.filter(subject => 
+      subject.name.startsWith(baseSubject + '_') && 
+      subject.name.includes('_Obtained')
+    );
+    
+    const subjectTotal = subjectComponents.reduce((sum, component) => sum + component.obtained, 0);
+    totalMarks += subjectTotal;
+  });
+  
+  return totalMarks;
 }
 
-app.get('/', (req, res) => {
-  res.send('Exam Results Portal API is running');
-});
+// Helper function to calculate CGPA
+function calculateCGPA(percentage) {
+  // Implement your CGPA calculation logic here
+  // This is a simple example
+  if (percentage >= 90) return 'A+';
+  if (percentage >= 80) return 'A';
+  if (percentage >= 70) return 'B+';
+  if (percentage >= 60) return 'B';
+  if (percentage >= 50) return 'C';
+  if (percentage >= 33) return 'D';
+  return 'F';
+}
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// Start server
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
-
-module.exports = app; // For testing purposes
