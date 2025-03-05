@@ -10,14 +10,32 @@ app.use(express.json());
 app.use(cors());
 
 // Check for required environment variables
-if (!process.env.SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
-  console.error('Missing required environment variables. Please set SPREADSHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY.');
+if (!process.env.SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
+  console.error('Missing required environment variables. Please set SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_EMAIL.');
 }
 
 // Google Sheet API credentials
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+
+// Improved private key handling
+let GOOGLE_PRIVATE_KEY;
+if (process.env.GOOGLE_PRIVATE_KEY) {
+  // Handle different formats of the private key
+  GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
+  
+  // If the key doesn't contain the header, it might be incorrectly formatted
+  if (!GOOGLE_PRIVATE_KEY.includes('-----BEGIN PRIVATE KEY-----')) {
+    // Try replacing literal \n with newlines
+    GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+  }
+  
+  console.log('Private key format check: Key begins with proper header:', 
+    GOOGLE_PRIVATE_KEY.startsWith('-----BEGIN PRIVATE KEY-----'));
+  console.log('Private key length:', GOOGLE_PRIVATE_KEY.length);
+} else {
+  console.error('GOOGLE_PRIVATE_KEY environment variable is missing');
+}
 
 // Sheet configuration
 const SHEET_NAME = "Sheet2"; // Change this to match your exact sheet name
@@ -28,10 +46,21 @@ async function loadSheet() {
     console.log('Connecting to Google Sheet...');
     const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
     
-    await doc.useServiceAccountAuth({
-      client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      private_key: GOOGLE_PRIVATE_KEY,
-    });
+    try {
+      // Authenticate with service account
+      await doc.useServiceAccountAuth({
+        client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: GOOGLE_PRIVATE_KEY,
+      });
+    } catch (authError) {
+      console.error('Authentication error details:', authError.message);
+      // Check if there's an OpenSSL error which often indicates private key format issues
+      if (authError.message.includes('opensslErrorStack')) {
+        console.error('OpenSSL error detected - this usually means the private key format is incorrect');
+        console.error('Please check your GOOGLE_PRIVATE_KEY environment variable format');
+      }
+      throw new Error(`Authentication failed: ${authError.message}`);
+    }
     
     await doc.loadInfo();
     console.log(`Spreadsheet loaded: "${doc.title}" with ${doc.sheetCount} sheets`);
