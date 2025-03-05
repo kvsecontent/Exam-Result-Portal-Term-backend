@@ -9,15 +9,27 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
-// Check for required environment variables
-if (!process.env.SPREADSHEET_ID || !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
-  console.error('Missing required environment variables. Please set SPREADSHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY.');
-}
-
-// Google Sheet API credentials
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
+// Improved environment variable handling
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 let GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
+
+// Debug environment variables
+console.log('Environment variable check:');
+console.log('- SPREADSHEET_ID present:', !!SPREADSHEET_ID);
+console.log('- GOOGLE_SERVICE_ACCOUNT_EMAIL present:', !!GOOGLE_SERVICE_ACCOUNT_EMAIL);
+console.log('- GOOGLE_PRIVATE_KEY present:', !!GOOGLE_PRIVATE_KEY);
+
+// Use default values if environment variables are missing (for development only)
+if (!SPREADSHEET_ID) {
+  console.warn('WARNING: Using default SPREADSHEET_ID - set the environment variable for production');
+  SPREADSHEET_ID = '116NbAamZahJdmH04jV4ZahzedoW6eliZqKl0Q6tLvv4';
+}
+
+if (!GOOGLE_SERVICE_ACCOUNT_EMAIL) {
+  console.warn('WARNING: Using default GOOGLE_SERVICE_ACCOUNT_EMAIL - set the environment variable for production');
+  GOOGLE_SERVICE_ACCOUNT_EMAIL = 'term-exam-results-service@gen-lang-client-0184615441.iam.gserviceaccount.com';
+}
 
 // Format the private key if needed
 if (GOOGLE_PRIVATE_KEY && !GOOGLE_PRIVATE_KEY.includes('-----BEGIN PRIVATE KEY-----')) {
