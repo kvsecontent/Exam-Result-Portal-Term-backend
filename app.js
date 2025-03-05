@@ -1,6 +1,5 @@
 // app.js
 const express = require('express');
-const { GoogleSpreadsheet } = require('google-spreadsheet');
 const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 3000;
@@ -9,25 +8,62 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
-// Google Sheet API credentials
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
-const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+// Basic route to verify server is running
+app.get('/', (req, res) => {
+  res.send('Exam Result API is running! Environment check: ' + 
+    (process.env.SPREADSHEET_ID ? 'SPREADSHEET_ID ✓' : 'SPREADSHEET_ID ✗') + ', ' + 
+    (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? 'GOOGLE_SERVICE_ACCOUNT_EMAIL ✓' : 'GOOGLE_SERVICE_ACCOUNT_EMAIL ✗') + ', ' + 
+    (process.env.GOOGLE_PRIVATE_KEY ? 'GOOGLE_PRIVATE_KEY ✓' : 'GOOGLE_PRIVATE_KEY ✗'));
+});
 
-// Connect to Google Sheet
-async function loadSheet() {
-  const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
-  
-  await doc.useServiceAccountAuth({
-    client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    private_key: GOOGLE_PRIVATE_KEY,
-  });
-  
-  await doc.loadInfo();
-  return doc;
+// Initial error handling for Google Spreadsheet connection
+let googleSpreadsheet;
+try {
+  // Only require the module if it's available
+  googleSpreadsheet = require('google-spreadsheet');
+  console.log('Successfully loaded google-spreadsheet module');
+} catch (error) {
+  console.error('Error loading google-spreadsheet module:', error.message);
 }
 
-// API endpoint to get student result by roll number and school code
+// Connect to Google Sheet with error handling
+async function loadSheet() {
+  try {
+    if (!googleSpreadsheet) {
+      throw new Error('google-spreadsheet module not available');
+    }
+    
+    const { GoogleSpreadsheet } = googleSpreadsheet;
+    
+    // Check if environment variables are available
+    if (!process.env.SPREADSHEET_ID) {
+      throw new Error('SPREADSHEET_ID environment variable is missing');
+    }
+    
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_EMAIL environment variable is missing');
+    }
+    
+    if (!process.env.GOOGLE_PRIVATE_KEY) {
+      throw new Error('GOOGLE_PRIVATE_KEY environment variable is missing');
+    }
+    
+    const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
+    
+    await doc.useServiceAccountAuth({
+      client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    });
+    
+    await doc.loadInfo();
+    return doc;
+  } catch (error) {
+    console.error('Error loading Google Sheet:', error.message);
+    throw error;
+  }
+}
+
+// API endpoint with better error handling
 app.get('/api/student/:rollNumber', async (req, res) => {
   try {
     const rollNumber = req.params.rollNumber;
@@ -44,28 +80,30 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       });
     }
     
-    // Load sheet
-    const doc = await loadSheet();
+    // Safely load the sheet
+    let doc;
+    try {
+      doc = await loadSheet();
+    } catch (error) {
+      console.error('Failed to load sheet:', error.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Server error: Could not access student data'
+      });
+    }
+    
+    // Get the first sheet
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
     
     console.log(`Total rows in sheet: ${rows.length}`);
     
-    // Log column headers to help debug
+    // Log the first row to see column headers
     if (rows.length > 0) {
-      const firstRow = rows[0];
-      console.log('Available columns:', Object.keys(firstRow));
-      
-      // Check if School_Code column exists
-      const hasSchoolCode = Object.keys(firstRow).includes('School_Code');
-      console.log('Has School_Code column:', hasSchoolCode);
-      
-      if (!hasSchoolCode) {
-        console.log('WARNING: School_Code column not found in sheet');
-      }
+      console.log('Available columns:', Object.keys(rows[0]));
     }
     
-    // First find student with matching roll number
+    // Find student with matching roll number
     const student = rows.find(row => row.Roll_Number === rollNumber);
     
     if (!student) {
@@ -76,13 +114,11 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       });
     }
     
+    console.log('Student found:', student.Name);
+    
     // Check for School_Code field
     if (!('School_Code' in student)) {
-      console.log('ERROR: School_Code column does not exist in the sheet');
-      
-      // IMPORTANT: Since the column doesn't exist, let's consider it "valid" for now
-      // You can make this more strict later once the column is added
-      console.log('Allowing access since School_Code column is missing');
+      console.log('WARNING: School_Code column exists but not in this student record');
     } else {
       // School code validation
       const correctSchoolCode = String(student.School_Code || '').trim();
@@ -91,7 +127,7 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       console.log('Correct School Code:', correctSchoolCode);
       console.log('Provided School Code:', providedSchoolCode);
       
-      // Check if school codes don't match
+      // Check if valid school code is in sheet and doesn't match
       if (correctSchoolCode !== '' && correctSchoolCode !== providedSchoolCode) {
         console.log('School code mismatch!');
         return res.status(403).json({
@@ -103,7 +139,7 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       console.log('School code validation passed');
     }
     
-    // Process student data (extract subjects, calculate totals, etc.)
+    // Process student data
     const subjects = [];
     
     // Extract subject data from all column names
@@ -170,10 +206,11 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error fetching student data:', error);
+    console.error('Unhandled error in route handler:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching student data'
+      message: 'Server error while fetching student data',
+      error: error.message
     });
   }
 });
@@ -189,12 +226,18 @@ function calculateGrade(percentage) {
   return 'F';
 }
 
-// Simple test route to verify the server is running
-app.get('/', (req, res) => {
-  res.send('Exam Result API is running!');
+// Make process errors visible
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
 });
 
-// Start the server
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Start the server with error handling
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+}).on('error', (error) => {
+  console.error('Error starting server:', error.message);
 });
