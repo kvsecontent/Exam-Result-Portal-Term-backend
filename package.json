@@ -1,20 +1,15 @@
 {
-  "name": "exam-results-api",
+  "name": "term-exam-result-api",
   "version": "1.0.0",
-  "description": "Backend API for Exam Results Portal",
+  "description": "API for serving exam results",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "nodemon app.js"
+    "start": "node app.js"
   },
   "dependencies": {
-    "axios": "^1.6.2",
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
+    "google-spreadsheet": "^4.1.1"
   },
   "engines": {
     "node": ">=14.0.0"
