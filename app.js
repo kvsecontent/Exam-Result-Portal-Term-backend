@@ -1,4 +1,4 @@
-// server.js or index.js
+// server.js or app.js for Render
 const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const cors = require('cors');
@@ -9,31 +9,45 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
 
+// Error handler middleware - prevents code from being exposed
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ 
+    success: false, 
+    message: 'Internal server error' 
+  });
+});
+
 // Google Sheet API credentials
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
 
 // Connect to Google Sheet
 async function loadSheet() {
-  const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
-  
-  await doc.useServiceAccountAuth({
-    client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    private_key: GOOGLE_PRIVATE_KEY,
-  });
-  
-  await doc.loadInfo();
-  return doc;
+  try {
+    const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
+    
+    await doc.useServiceAccountAuth({
+      client_email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: GOOGLE_PRIVATE_KEY,
+    });
+    
+    await doc.loadInfo();
+    return doc;
+  } catch (error) {
+    console.error('Error loading sheet:', error);
+    throw new Error('Unable to connect to database');
+  }
 }
 
-// API endpoint to get student result by roll number and school code
+// API endpoint to get student result
 app.get('/api/student/:rollNumber', async (req, res) => {
   try {
     const rollNumber = req.params.rollNumber;
     const schoolCode = req.query.school_code;
     
-    // Validate inputs
+    // Input validation
     if (!rollNumber || !schoolCode) {
       return res.status(400).json({
         success: false,
@@ -43,16 +57,24 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     
     // Load sheet
     const doc = await loadSheet();
-    
-    // Assuming first sheet contains student data
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
     
     // Find student with matching roll number AND school code
-    const student = rows.find(row => 
-      row.Roll_Number === rollNumber && 
-      row.School_Code === schoolCode
-    );
+    let student = null;
+    
+    for (const row of rows) {
+      // Convert to strings and trim for consistent comparison
+      const rowRollNumber = String(row.Roll_Number || '').trim();
+      const rowSchoolCode = String(row.School_Code || '').trim();
+      const requestRollNumber = String(rollNumber).trim();
+      const requestSchoolCode = String(schoolCode).trim();
+      
+      if (rowRollNumber === requestRollNumber && rowSchoolCode === requestSchoolCode) {
+        student = row;
+        break;
+      }
+    }
     
     if (!student) {
       return res.status(404).json({
@@ -61,27 +83,25 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       });
     }
     
-    // Process student data (similar to your existing code)
-    // This is a basic example - modify according to your actual data structure
+    // Process student data
     const subjects = [];
     
-    // Process all columns to find subject data
-    for (const [key, value] of Object.entries(student)) {
-      // If column name contains subject info (add your logic here)
-      if (key.includes('_Obtained') || key.includes('_Max_Marks')) {
+    // Extract subject data from the row
+    Object.entries(student).forEach(([key, value]) => {
+      if (value && (key.includes('_Obtained') || key.includes('_Max_Marks'))) {
         subjects.push({
           name: key,
           obtained: parseInt(value) || 0
         });
       }
-    }
+    });
     
-    // Calculate total obtained marks, percentage, etc.
+    // Calculate total obtained marks
     const totalObtained = calculateTotalMarks(subjects);
-    const totalMarks = 100; // or calculate from your data
+    const totalMarks = 100; // Adjust as needed
     const percentage = ((totalObtained / totalMarks) * 100).toFixed(2);
     
-    // Prepare student data to return
+    // Prepare student data response
     const studentData = {
       name: student.Name,
       class: student.Class,
@@ -104,8 +124,8 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error fetching student data:', error);
-    res.status(500).json({
+    console.error('Error processing request:', error);
+    return res.status(500).json({
       success: false,
       message: 'Server error while fetching student data'
     });
@@ -114,7 +134,7 @@ app.get('/api/student/:rollNumber', async (req, res) => {
 
 // Helper function to calculate total marks
 function calculateTotalMarks(subjects) {
-  // Get unique base subjects (e.g., "Hindi" from "Hindi_Periodic_Test_Obtained")
+  // Get unique base subjects
   const baseSubjects = new Set();
   subjects.forEach(subject => {
     if (subject.name.includes('_')) {
@@ -140,8 +160,6 @@ function calculateTotalMarks(subjects) {
 
 // Helper function to calculate CGPA
 function calculateCGPA(percentage) {
-  // Implement your CGPA calculation logic here
-  // This is a simple example
   if (percentage >= 90) return 'A+';
   if (percentage >= 80) return 'A';
   if (percentage >= 70) return 'B+';
@@ -150,6 +168,11 @@ function calculateCGPA(percentage) {
   if (percentage >= 33) return 'D';
   return 'F';
 }
+
+// Default route - provide a simple response for the root path
+app.get('/', (req, res) => {
+  res.send('Exam Results API is running. Use /api/student/:rollNumber?school_code=XXX to access student data.');
+});
 
 // Start server
 app.listen(port, () => {
