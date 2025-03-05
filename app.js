@@ -19,9 +19,13 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // Your Google Sheet ID
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
 
+// Sheet configuration
+const SHEET_NAME = "Sheet2"; // Change this to match your exact sheet name
+
 // Connect to Google Sheet
 async function loadSheet() {
   try {
+    console.log('Connecting to Google Sheet...');
     const doc = new GoogleSpreadsheet(SPREADSHEET_ID);
     
     await doc.useServiceAccountAuth({
@@ -30,6 +34,12 @@ async function loadSheet() {
     });
     
     await doc.loadInfo();
+    console.log(`Spreadsheet loaded: "${doc.title}" with ${doc.sheetCount} sheets`);
+    
+    // List all available sheets for debugging
+    const sheetNames = doc.sheetsByIndex.map(sheet => sheet.title);
+    console.log('Available sheets:', sheetNames);
+    
     return doc;
   } catch (error) {
     console.error('Error connecting to Google Sheet:', error);
@@ -55,8 +65,27 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     
     // Load sheet
     const doc = await loadSheet();
-    const sheet = doc.sheetsByIndex[0];
-    const rows = await sheet.getRows();
+    
+    // Get the sheet by name (preferred method)
+    let targetSheet = doc.sheetsByTitle[SHEET_NAME];
+    
+    // If sheet not found by name, try index 1 (Sheet2) as fallback
+    if (!targetSheet) {
+      console.log(`Sheet "${SHEET_NAME}" not found by name, trying index 1 as fallback`);
+      targetSheet = doc.sheetsByIndex[1];
+      
+      if (!targetSheet) {
+        console.error('Failed to find the target sheet by name or index');
+        return res.status(500).json({
+          success: false,
+          message: 'Server configuration error: Target sheet not found'
+        });
+      }
+    }
+    
+    console.log(`Using sheet: "${targetSheet.title}" (rowCount: ${targetSheet.rowCount})`);
+    const rows = await targetSheet.getRows();
+    console.log(`Loaded ${rows.length} rows from sheet`);
     
     console.log(`Looking for student with roll number: ${rollNumber} and school code: ${schoolCode}`);
     
@@ -64,6 +93,7 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     const student = rows.find(row => row.Roll_Number === rollNumber);
     
     if (!student) {
+      console.log(`Student with roll number ${rollNumber} not found`);
       return res.status(404).json({
         success: false,
         message: 'Student not found. Please check admission number and try again.'
@@ -74,7 +104,7 @@ app.get('/api/student/:rollNumber', async (req, res) => {
     console.log('Student School Code:', student.School_Code);
     console.log('Provided School Code:', schoolCode);
     
-    // IMPORTANT: This is the key fix - strictly validate school code
+    // IMPORTANT: Strictly validate school code
     // Check if school code matches - convert both to strings, trim whitespace
     const correctSchoolCode = String(student.School_Code || '').trim();
     const providedSchoolCode = String(schoolCode).trim();
@@ -154,6 +184,8 @@ app.get('/api/student/:rollNumber', async (req, res) => {
       result: result
     };
     
+    console.log(`Successfully processed result for ${student.Name}`);
+    
     return res.json({
       success: true,
       data: studentData
@@ -186,8 +218,14 @@ app.get('/', (req, res) => {
   res.send('Exam Result API is running! Dual validation is enabled.');
 });
 
+// Handle all other routes
+app.use('*', (req, res) => {
+  res.status(404).send('Route not found');
+});
+
 // Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Target sheet: "${SHEET_NAME}"`);
 });
